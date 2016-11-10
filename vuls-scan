@@ -2,161 +2,323 @@
 # -*- encoding: utf-8 -*-
 """
 Preform a scan of host using vuls.
-
-Requirements:
- * docker
- * run as a user with permission to run docker containers
- * ssh-agent running and SSH_AUTH_SOCK environ
- * internet access to pull docker images, and for the work time containers do
-
-TODO: add logging for this script/module
-TODO: work out how dependable prepare is
- - doesn't look good as there was a [yN] on debian which failed
-TODO: fix results permissions issue, maybe with --userns-remap, but probably
- not as it involves changing system level config (for the daemon).
 """
+import argparse
+import logging
 import os
 import sqlite3
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
+from shutil import copyfile
 from subprocess import run
 
 
-class VulsScanner(object):
+class VulsScanException(Exception):
     """
+    Class for exceptions which are may occur due to issues beyond control of
+    this developer.
     """
-    def __init__(self, host_list=None):
-        self.base_directory = os.path.dirname(os.path.abspath(sys.argv[0]))
-        self.data_directory = self._abs_path('./vuls-scan.data')
-        self.refresh_period = timedelta(hours=6)
-        self.force_update = False
-        self.host_list = host_list
 
+
+class DatabaseDoesNotExist(VulsScanException):
+    """
+    This will be raised if there is an attempt to access the database before
+    it has been created.
+    """
+
+
+class DockerManager(object):
+    REQUIRED_DIRECTORIES = []
+
+    def __init__(self):
         self.ensure_directories()
-        self.ensure_data()
-        self.generate_scan_config()
 
-    def _abs_path(self, path):
-        return os.path.join(self.base_directory, path)
+    @property
+    def path_prefix(self):
+        return os.path.abspath(sys.argv[0])
+
+    def _path(self, path):
+        """
+        Return a path relative to this script.
+        e.g. /home/user/script.path/foo
+        """
+        return "{}.{}".format(self.path_prefix, path)
 
     def ensure_directories(self):
         """
         Ensure all the required directories exist.
         """
-        directories = [self._abs_path(d) for d in (
-            './vuls-scan.results',
-            './vuls-scan.logs',
-            './vuls-scan.logs/fetchnvd',
-            './vuls-scan.logs/vuls',
-            './vuls-scan.data',
-        )]
+        directories = [self._abs_path(d) for d in self.REQUIRED_DIRECTORIES]
         for directory in directories:
             if not os.path.isdir(directory):
                 if os.path.exists(directory):
                     raise ValueError("{} is not a directory".format(directory))
                 os.makedirs(directory)
 
-    def ensure_data(self):
+
+class NVD(DockerManager):
+    """
+    National Vulnerability Database
+    """
+    REQUIRED_DIRECTORIES = [
+        'data',
+        'logs',
+        'logs/database',
+    ]
+
+    def __init__(self):
+        super()
+        self.database_path = self._path('data/cve.sqlite3')
+
+    @property
+    def database_initialised(self):
         """
-        Ensure there is CVE data that vuls can use
+        Indicate if the database has been initialised.
         """
-        # get the latest year in data
-        database_path = self._abs_path('./vuls-scan.data/cve.sqlite3')
-        start_year = None
-        if (not os.path.isfile(database_path)
-                or os.path.getsize(database_path) == 0):
-            start_year = 2002
-            # create the file so the permissions are correct
-            with open(database_path, 'wb'):
-                pass
-        else:
-            # see if an update is needed - could just look at last modified in some systems
-            database = sqlite3.connect(
-                    database_path,
+        return (os.path.isfile(self.database_path)
+                and os.path.getsize(self.database_path) > 0)
+
+    def get_new_cursor(self):
+        """
+        DRY way of getting a database cursor.
+        """
+        if not self.database_initialised:
+            raise DatabaseDoesNotExist()
+
+        if not hasattr(self, '_database_connection'):
+            self._database_connection = sqlite3.connect(
+                    self.database_path,
                     detect_types=sqlite3.PARSE_COLNAMES,
                     )
-            cursor = database.cursor()
-            last_update = cursor.execute('''
-                    SELECT Max(updated_at) as "[timestamp]"
-                    FROM   cve_details
-                    ''').fetchone()[0]
-            # import pdb; pdb.set_trace()
-            if (datetime.now() - last_update > self.refresh_period
-                    or self.force_update):
-                start_year = last_update.year
 
-        if start_year is not None:
-            self.pull_year_cve_data(range(start_year, date.today().year + 1))
+        return self._database_connection.cursor()
+
+    def get_cve_stats(self):
+        """
+        Return the number of CVEs and the last time any was updated.
+        """
+        total, last_modified = self.get_new_cursor().execute('''
+                SELECT
+                    Count(*),
+                    Max(updated_at) as "[timestamp]"
+                FROM nvds
+                ''').fetchone()
+        return (total, last_modified)
+
+    def update(self):
+        """
+        Refresh the NVD copy. Return a boolean indicating if any updates where
+        made, and the number of CVEs added.
+
+        Avoid running this in the minutes that a new year starts to avoid
+        missing the last few updates of the year. Probably incredibly unlikely.
+        """
+        if not self.database_initialised:
+            old_total = 0
+            update_from = datetime(2002, 1, 1)
+            with open(self.database_path, 'wb'):
+                pass
+        else:
+            old_total, update_from = self.get_cve_stats()
+
+        self.pull_year_cve_data(range(update_from.year, date.today().year + 1))
+        new_total, updated_to = self.get_cve_stats()
+
+        return (update_from != updated_to, new_total - old_total)
 
     def pull_year_cve_data(self, years):
+        """
+        Pull NVD updates and store them in the persistent sqlite3 database.
+        """
         command = [
             'docker', 'run',
             '--rm', '--interactive', '--tty',
-            '--volume={}/vuls-scan.data:/vuls'.format(self.base_directory),
-            '--volume={}/vuls-scan.logs/fetchnvd:/var/log/vuls'.format(self.base_directory),
+            '--volume={}:/vuls'.format(self._path('data')),
+            '--volume={}:/var/log/vuls'.format(self._path('logs/database')),
             'vuls/go-cve-dictionary',
             'fetchnvd', '-years',
-        ]
-        command += [str(year) for year in years]
+        ] + [str(year) for year in years]
         run(command)
 
-    def generate_scan_config(self):
+    def delete(self):
         """
-        Generate a config.toml or use an existing one.
+        Remove the database.
         """
-        # skip out and use existing config. If it doesn't exist then latest
-        # vuls do the complaining
-        if self.host_list is None:
-            return
-        vuls_config_path = self._abs_path('vuls-scan.data/config.toml')
-        config = [
-            '[default]',
-            'port = "22"',
-            'user = "root"',
-            '[servers]',
-        ]
-        # if using a private key rather than ssh-agent then add
-        # keyPath = "/root/.ssh/id_rsa"
-        for name, target in self.host_list:
-            # TODO: verify name
-            # TODO: allow host:port
-            config += [
-                '[servers.{}]'.format(name),
-                'host = "{}"'.format(target),
-            ]
-        with open(vuls_config_path, 'wb') as config_file:
-            config_file.writelines((line+'\n').encode('utf-8') for line in config)
+        try:
+            os.remove(self.database_path)
+        except FileNotFoundError:
+            pass
 
 
-    def perform_scan(self):
+class Vuls(DockerManager):
+    REQUIRED_DIRECTORIES = [
+            'data',
+            'data/keys'
+            'logs',
+            'logs/scan',
+            'results',
+    ]
+
+    def __init__(self, config_path):
+        super()
+        self.config_path = config_path
+
+        copyfile(
+            self.config_path,
+            self._path('data/config.toml'),
+        )
+
+    def scan(self):
         """
-        Scan the target machines.
+        Scan the target machines with the provided config.
         """
-        # TODO: add private SSH key option
-        # TODO: consider optional report type
-        # TODO: check SSH_AUTH_SOCK is set
-        # '--volume=ssh/:/root/.ssh/:ro'
-        ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
-        results_dir = self._abs_path('./vuls-scan.results')
-        command = [
-                'docker', 'run', '--rm',
+        nvd = NVD()
+        if not nvd.database_initialised:
+            raise DatabaseDoesNotExist()
+
+        try:
+            ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
+        except KeyError:
+            logging.warn("No SSH_AUTH_SOCK found. See ssh-agent")
+            ssh_auth_sock = None
+
+        results_dir = self._path('results')
+        docker = ['docker']
+        docker_args = [
+                'run', '--rm',
                 '--volume=/etc/localtime:/etc/localtime:ro',
-                '--volume={}:/vuls'.format(self.data_directory),
+                '--volume={}:/vuls'.format(self._path('data')),
                 '--volume={0}:{0}'.format(results_dir),
-                '--volume={}:/var/log/vuls'.format(self._abs_path('./vuls-scan.logs/vuls')),
-                '--volume={}:/vuls/SSH_AUTH_SOCK'.format(ssh_auth_sock),
-                '--env=SSH_AUTH_SOCK=/vuls/SSH_AUTH_SOCK',
-                'vuls/vuls',
+                '--volume={}:/var/log/vuls'.format(self._path('logs/scan')),
+        ]
+        if ssh_auth_sock:
+            docker_args += [
+                    '--volume={}:/vuls/SSH_AUTH_SOCK'.format(ssh_auth_sock),
+                    '--env=SSH_AUTH_SOCK=/vuls/SSH_AUTH_SOCK',
+            ]
+
+        image = ['vuls/vuls']
+        container_args = [
                 'scan',
                 '--results-dir={}'.format(results_dir),
                 '-cve-dictionary-dbpath=/vuls/cve.sqlite3',
                 '-report-json',
         ]
-        run(command)
+        run(docker+docker_args+image+container_args)
 
-host_list = [
-    ('bristac{}'.format(i), 'bristac{}.miniserver.com'.format(i))
-    for i in range(6)
-]
-scanner = VulsScanner(host_list)
-scanner.perform_scan()
+    def browse_results(self):
+        """
+        Start up the ncurses based user interface to the scan results.
+
+        TODO: move this somewhere else, it doesn't use a config file.
+        """
+        docker = ['docker']
+        docker_args = [
+                'run', '--rm', '-it',
+                '--volume={}:/vuls'.format(self._path('data')),
+                '--volume={}:/vuls/results'.format(self._path('results')),
+                ]
+        image = ['vuls/vuls']
+        container_args = ['tui']
+        run(docker+docker_args+image+container_args)
+
+
+class VulsScannerInterface(object):
+    """
+    CLI for VulsScanner
+    """
+
+    @classmethod
+    def run(cls, args):
+        """
+        Take args, pop the command, and create an instance to handle the run.
+        """
+        args = cls.parse_args(args)
+        command = args.command
+        del args.command
+        try:
+            cls(command, args)
+        except DatabaseDoesNotExist:
+            logging.error(
+                    "Unable to preform operation as the database does not "
+                    "yet exist. Run 'vuls-scan database update' first",
+                    )
+
+    def __init__(self, command, args):
+        """
+        Dispatch the arguments to the approriate command handler.
+        """
+        {
+            'database': self.database,
+            'scan': self.scan,
+        }[command](args)
+
+    def database(self, args):
+        nvd = NVD()
+        if args.action == 'update':
+            nvd.update()
+        elif args.action == 'stats':
+            entries, last_update = nvd.get_cve_stats()
+            print("There are currently {} NVD entries.".format(entries))
+            print("The last time any changes were retrieved was {}".format(last_update))
+        elif args.action == 'delete':
+            nvd.delete()
+
+    def scan(self, args):
+        """
+        Run a scan with the given config
+        """
+        vuls = Vuls(args.config)
+        vuls.scan()
+        if args.view:
+            vuls.browse_results()
+
+    @classmethod
+    def parse_args(cls, args):
+        parser = argparse.ArgumentParser(
+                description="Scan for unsecure packages using vuls.",
+        )
+        commands = parser.add_subparsers(dest='command', help="command help")
+        commands.required = True  # see https://bugs.python.org/issue9253
+
+        # maybe database update/delete/stats
+        database = commands.add_parser(
+                'database',
+                help="Commands relating to the database",
+                )
+        database_action = database.add_subparsers(dest='action')
+        database_action.required = True
+        database_action.add_parser(
+                'update',
+                help="Retrieve CVE data and store it for future scans"
+        )
+        database_action.add_parser(
+                'stats',
+                help="Show stats for the current CVE data",
+        )
+        database_action.add_parser(
+                'delete',
+                help="Remove the CVE database entierly",
+        )
+
+        scan = commands.add_parser(
+                'scan',
+                help="Perform a scan on target hosts",
+        )
+        scan.add_argument(
+                '--config',
+                required=True,
+                help="The config file to use for vuls",
+        )
+        # probably mutualy exclusive to prepare
+        scan.add_argument(
+                '--view',
+                action='store_true',
+                help="Browse the results of the scan when finished",
+        )
+
+        return parser.parse_args(args)
+
+
+if __name__ == '__main__':
+    VulsScannerInterface.run(None)

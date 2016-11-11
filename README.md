@@ -9,8 +9,9 @@ This requires Python3 and Docker.
 This is currently the work of a couple of evenings, so it is probably good to
 wait until this has matured a bit more before using taking anything as final.
 
-## Minimal steps
-Below are the minimal steps to running and reviewing a scan.
+## Getting started
+To being, you will need Python3 and Docker. There are no additional Python
+module dependencies and this doesn't have to be run from root (see caveats).
 
 ### Prepare hosts/authenication
 You can connect to the hosts using `ssh-agent` which is what I would currently recommend unless you have a vuls user set up on each host, in which case I it
@@ -25,19 +26,19 @@ the scans as root on target machines.  see [`vuls prepare`](https://github.com/f
 I need to write more about this, and also update the code to at least try to
 run `vuls prepare`.
 
-### Minimal usage
-Once you have this script and Docker available, you will have to update the
-database. If you do not, you will get an error message telling you to do it
+### Update the database
+Once you have this script and Docker create/available, you will have to update
+the database. If you do not, you will get an error message telling you to do it
 before you retry.
 ```bash
-$ ./vuls-scan database update
+./vuls-scan database update
 ```
 
 ### Create a vuls scan config file
 You will have to provide a config file for vuls, but all you need to scan a single host would be:
 ```toml
-[server.name-of-results]
-host = "myhost.domain.tld"
+[server.my-host]
+host = "my-host.domain.tld"
 user = "root"
 ```
 
@@ -48,7 +49,7 @@ you want to:
 ```toml
 [default]
 port = "22"
-user = root
+user = "root"
 
 [server]
 [server.mail]
@@ -86,6 +87,15 @@ containers = [
 The config will be copied to `vuls-scan.data/config.toml` for the run, so that
 it ends inside the vuls container at `/vuls/config.toml`.
 
+### Run the scan and view the results
+```bash
+./vuln-scan scan --config=my-config.toml --view
+```
+I haven't read into/tested how vuls handles problems with hosts.
+
+## Using the results
+See [VulsRepo](https://github.com/usiusi360/vulsrepo)
+** TODO **
 
 ## Caveats
 

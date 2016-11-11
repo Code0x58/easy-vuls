@@ -206,6 +206,17 @@ class Vuls(DockerManager):
         ]
         run(docker+docker_args+image+container_args)
 
+        # change the permissiosn of the scan results
+        stats = os.stat(self._path('results'))
+        docker_args.append('--entrypoint=/bin/sh')
+        container_args = [
+                '-c',
+                'chown -R {}:{} {}'.format(
+                    stats.st_uid, stats.st_gid, results_dir
+                    ),
+        ]
+        run(docker+docker_args+image+container_args)
+
     def browse_results(self):
         """
         Start up the ncurses based user interface to the scan results.

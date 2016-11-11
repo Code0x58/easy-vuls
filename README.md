@@ -13,7 +13,7 @@ wait until this has matured a bit more before using taking anything as final.
 To being, you will need Python3 and Docker. There are no additional Python
 module dependencies and this doesn't have to be run from root (see caveats).
 
-### Prepare hosts/authenication
+### Prepare hosts/authentication
 You can connect to the hosts using `ssh-agent` which is what I would currently recommend unless you have a vuls user set up on each host, in which case I it
 wouldn't be quite as crazy to put a private key into the container.
 
@@ -95,6 +95,9 @@ I haven't read into/tested how vuls handles problems with hosts.
 
 ## Using the results
 See [VulsRepo](https://github.com/usiusi360/vulsrepo)
+
+The results are stored in `./vuls-scan.results/`.
+
 ** TODO **
 
 ## Caveats
@@ -109,14 +112,9 @@ This should be easy enough to fix in `vuls`
 by providing `-y` or setting an environment variable to tell `apt` that the
 session isn't interactive (I can't remember what right now).
 
-## vuls scan
-At the moment the results of vuls' scan are owned by root. I'm not sure of a
-workaround, some ideas are:
- * see about updating [`vuls scan`](https://github.com/future-architect/vuls#usage-scan)
-  to work around this, using either the `Dockerfile` and/or program. This is probably the best thing to do if reasonable to put a pull request in for.
- * add a flag to `scan` which chmods the results to the same user:group as the
-  `vuls-scan` script. This doesn't reduce the permissions needed but may make
-  life easier
- * mention a --userns-remap option for users who don't mind getting their hands
-  dirty. It sounds like this involves system wide changes that require root to
-  set up, so doesn't help maintain a minimal barrier to use.
+## TODOs
+### Look into premissions of scan results
+At the moment the results of vuls' scan are owned by root. As a quick work around this the results are `chmod`ed from docker after each scan.
+
+Later I will look into putting in a pull request to do something about in in
+[`vuls scan`](https://github.com/future-architect/vuls#usage-scan).

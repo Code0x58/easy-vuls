@@ -67,7 +67,7 @@ class NVD(DockerManager):
     ]
 
     def __init__(self):
-        super()
+        super().__init__()
         self.database_path = self._path('data/cve.sqlite3')
 
     @property
@@ -160,7 +160,7 @@ class Vuls(DockerManager):
     ]
 
     def __init__(self, config_path):
-        super()
+        super().__init__()
         self.config_path = config_path
         self.results_directory = self._path('results')
 

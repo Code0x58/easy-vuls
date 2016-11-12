@@ -63,7 +63,6 @@ class NVD(DockerManager):
     REQUIRED_DIRECTORIES = [
         'data',
         'logs',
-        'logs/database',
     ]
 
     def __init__(self):
@@ -155,7 +154,6 @@ class Vuls(DockerManager):
             'data',
             'data/keys'
             'logs',
-            'logs/scan',
             'results',
     ]
 
@@ -176,7 +174,7 @@ class Vuls(DockerManager):
         if ssh_auth_sock is None:
             logging.warn("No SSH_AUTH_SOCK found. See ssh-agent")
 
-        log_directory = self._path('logs/{}'.format('command'))
+        log_directory = self._path('logs/{}'.format(command))
         run_args = [
             'docker', 'run',
             '--rm', '--interactive', '--tty',

@@ -9,7 +9,7 @@ import os
 import sqlite3
 import sys
 from datetime import date, datetime
-from shutil import copyfile
+from shutil import copyfile, rmtree
 from subprocess import run
 
 
@@ -48,7 +48,7 @@ class DockerManager(object):
         """
         Ensure all the required directories exist.
         """
-        directories = [self._abs_path(d) for d in self.REQUIRED_DIRECTORIES]
+        directories = [self._path(d) for d in self.REQUIRED_DIRECTORIES]
         for directory in directories:
             if not os.path.isdir(directory):
                 if os.path.exists(directory):
@@ -162,11 +162,41 @@ class Vuls(DockerManager):
     def __init__(self, config_path):
         super()
         self.config_path = config_path
+        self.results_directory = self._path('results')
 
+    def run(self, command, args):
+        """
+        Run vuls/vuls with the given command and arguments.
+        """
         copyfile(
             self.config_path,
             self._path('data/config.toml'),
         )
+        ssh_auth_sock = os.environ.get('SSH_AUTH_SOCK')
+        if ssh_auth_sock is None:
+            logging.warn("No SSH_AUTH_SOCK found. See ssh-agent")
+
+        log_directory = self._path('logs/{}'.format('command'))
+        run_args = [
+            'docker', 'run',
+            '--rm', '--interactive', '--tty',
+            '--volume=/etc/localtime:/etc/localtime:ro',
+            '--volume={}:/vuls'.format(self._path('data')),
+            '--volume={0}:{0}'.format(self.results_directory),
+            '--volume={}:/var/log/vuls'.format(log_directory),
+        ]
+        if ssh_auth_sock:
+            run_args += [
+                    '--volume={}:/vuls/SSH_AUTH_SOCK'.format(ssh_auth_sock),
+                    '--env=SSH_AUTH_SOCK=/vuls/SSH_AUTH_SOCK',
+            ]
+        run(run_args + ['vuls/vuls', command] + args)
+
+    def prepare(self):
+        """
+        Prepare hosts for scanning if necissary.
+        """
+        self.run('prepare', [])
 
     def scan(self):
         """
@@ -176,62 +206,56 @@ class Vuls(DockerManager):
         if not nvd.database_initialised:
             raise DatabaseDoesNotExist()
 
-        try:
-            ssh_auth_sock = os.environ['SSH_AUTH_SOCK']
-        except KeyError:
-            logging.warn("No SSH_AUTH_SOCK found. See ssh-agent")
-            ssh_auth_sock = None
-
-        results_dir = self._path('results')
-        docker = ['docker']
-        docker_args = [
-                'run', '--rm',
-                '--volume=/etc/localtime:/etc/localtime:ro',
-                '--volume={}:/vuls'.format(self._path('data')),
-                '--volume={0}:{0}'.format(results_dir),
-                '--volume={}:/var/log/vuls'.format(self._path('logs/scan')),
-        ]
-        if ssh_auth_sock:
-            docker_args += [
-                    '--volume={}:/vuls/SSH_AUTH_SOCK'.format(ssh_auth_sock),
-                    '--env=SSH_AUTH_SOCK=/vuls/SSH_AUTH_SOCK',
-            ]
-
-        image = ['vuls/vuls']
-        container_args = [
-                'scan',
-                '--results-dir={}'.format(results_dir),
+        args = [
+                '--results-dir={}'.format(self.results_directory),
                 '-cve-dictionary-dbpath=/vuls/cve.sqlite3',
                 '-report-json',
         ]
-        run(docker+docker_args+image+container_args)
+        self.run('scan', args)
 
-        # change the permissiosn of the scan results
-        stats = os.stat(self._path('results'))
-        docker_args.append('--entrypoint=/bin/sh')
-        container_args = [
-                '-c',
-                'chown -R {}:{} {}'.format(
-                    stats.st_uid, stats.st_gid, results_dir
-                    ),
-        ]
-        run(docker+docker_args+image+container_args)
+
+class Results(DockerManager):
+    REQUIRED_DIRECTORIES = [
+        'results',
+    ]
 
     def browse_results(self):
         """
         Start up the ncurses based user interface to the scan results.
-
-        TODO: move this somewhere else, it doesn't use a config file.
         """
         docker = ['docker']
         docker_args = [
-                'run', '--rm', '-it',
+                'run', '--rm', '-it',  # '--interactive', '--tty',
                 '--volume={}:/vuls'.format(self._path('data')),
                 '--volume={}:/vuls/results'.format(self._path('results')),
                 ]
         image = ['vuls/vuls']
         container_args = ['tui']
         run(docker+docker_args+image+container_args)
+
+    def serve(self, listen_address, listen_port):
+        """
+        Start up VulsRepo to serve the results.
+        """
+        docker = ['docker']
+        docker_args = [
+                'run', '--rm', '--interactive', '--tty',
+                '--volume={}:/vuls/results'.format(self._path('results')),
+                '--publish={}:{}:80'.format(listen_address, listen_port),
+        ]
+        image = ['vuls/vulsrepo']
+        run(docker+docker_args+image)
+
+    def delete(self):
+        """
+        Delete the recorded results.
+        """
+        results_dir = self._path('results')
+        for entry in os.scandir(results_dir):
+            if entry.is_dir(follow_symlinks=False):
+                rmtree(entry.path)
+            else:
+                os.remove(entry.path)
 
 
 class VulsScannerInterface(object):
@@ -262,6 +286,7 @@ class VulsScannerInterface(object):
         {
             'database': self.database,
             'scan': self.scan,
+            'results': self.results,
         }[command](args)
 
     def database(self, args):
@@ -280,9 +305,25 @@ class VulsScannerInterface(object):
         Run a scan with the given config
         """
         vuls = Vuls(args.config)
-        vuls.scan()
-        if args.view:
-            vuls.browse_results()
+        if args.action == 'prepare':
+            vuls.prepare()
+        else:
+            vuls.scan()
+
+    def results(self, args):
+        """
+        Show the results of previous scans in some way.
+        """
+        results = Results()
+        if args.action == 'browse':
+            results.browse_results()
+        elif args.action == 'serve':
+            print("About to serve results at {}:{}/vulsrepo/".format(
+                    args.address, args.port,
+            ))
+            results.serve(args.address, args.port)
+        elif args.action == 'delete':
+            results.delete()
 
     @classmethod
     def parse_args(cls, args):
@@ -321,11 +362,41 @@ class VulsScannerInterface(object):
                 required=True,
                 help="The config file to use for vuls",
         )
-        # probably mutualy exclusive to prepare
-        scan.add_argument(
-                '--view',
-                action='store_true',
-                help="Browse the results of the scan when finished",
+        scan_action = scan.add_subparsers(
+                dest='action',
+        )
+        scan_action.add_parser(
+                'prepare',
+                help="Prepare hosts for scanning if necissary",
+        )
+
+        results = commands.add_parser(
+                'results',
+                help="Commands to handle the results",
+                )
+        results_action = results.add_subparsers(dest='action')
+        results_action.required = True
+        results_action.add_parser(
+                'delete',
+                help="Delete all of the stored results",
+        )
+        results_action.add_parser(
+                'browse',
+                help="Browse the results in the terminal"
+        )
+        results_serve = results_action.add_parser(
+                'serve',
+                help="Serve the results for viewing",
+        )
+        results_serve.add_argument(
+                '--port',
+                default='8080',
+                help="Port to serve content on",
+        )
+        results_serve.add_argument(
+                '--address',
+                default='127.0.0.1',
+                help="Address to listen on"
         )
 
         return parser.parse_args(args)

@@ -58,6 +58,9 @@ class DockerManager(object):
                 os.makedirs(directory)
 
     def run(self, log, args, image='vuls/vuls', publish=()):
+        """
+        Run a container with base+additional arguments and fix volume owners.
+        """
         log_directory = self._path('logs/{}'.format(log))
         self._run(log, args, image=image, publish=publish)
 
@@ -79,7 +82,7 @@ class DockerManager(object):
 
     def _run(self, log, args, image, publish):
         """
-        Run a vuls/vuls container
+        Run a container with base+additional arguments.
         """
         docker_args = [
                 'run', '--rm', '--interactive', '--tty',
@@ -251,7 +254,6 @@ class Results(DockerManager):
 
     def __init__(self):
         super().__init__()
-        # TODO: update vuls/vulsrepo so that it can take in the results path
         self.volumes += (
             (self._path('results'), '/vuls/results'),
         )

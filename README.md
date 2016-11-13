@@ -1,8 +1,9 @@
-# vuls-scan
+# easy-vuls
 
 This provides a single script to provide a quick and easy way to use
-[vuls](https://hub.docker.com/r/vuls/vuls/) and
-[go-cve-dictionary](https://hub.docker.com/r/vuls/go-cve-dictionary/).
+[vuls](https://hub.docker.com/r/vuls/vuls/),
+[go-cve-dictionary](https://hub.docker.com/r/vuls/go-cve-dictionary/), and
+[VulsRepo](https://github.com/usiusi360/vulsrepo).
 
 This requires Python3 and Docker.
 
@@ -11,27 +12,20 @@ wait until this has matured a bit more before using taking anything as final.
 
 ## Getting started
 To being, you will need Python3 and Docker. There are no additional Python
-module dependencies and this doesn't have to be run from root (see caveats).
+module dependencies.
 
-### Prepare hosts/authentication
-You can connect to the hosts using `ssh-agent` which is what I would currently recommend unless you have a vuls user set up on each host, in which case I it
-wouldn't be quite as crazy to put a private key into the container.
+### Authentication
+You can connect to the hosts using `ssh-agent` which is what I recommend.
 
-You can use private keys by putting them in `vuls-scan.data/keys/` and then referring to it in your config file. ***Think extra carefully before doing
-this.***
-
-A fair few types of host don't need any preparation if you are okay with running
-the scans as root on target machines.  see [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)
-
-I need to write more about this, and also update the code to at least try to
-run `vuls prepare`.
+You can use private keys by putting them in `easy-vuls.data/keys/` and then
+referring to it in your configuration file. ***see the security section***
 
 ### Update the database
 Once you have this script and Docker create/available, you will have to update
 the database. If you do not, you will get an error message telling you to do it
 before you retry.
 ```bash
-./vuls-scan database update
+./easy-vuls database update
 ```
 
 ### Create a vuls scan config file
@@ -54,7 +48,7 @@ user = "root"
 [server]
 [server.mail]
 host = "mail.my-domain.net"
-# put the keys in ./vuls-scan.data/keys/mail_rsa to mount them in
+# put the keys in ./easy-vuls.data/keys/mail_rsa to mount them in
 keyPath = "/vuls/keys/mail_rsa"
 
 [server.logs]
@@ -84,8 +78,24 @@ containers = [
   "my-service",
 ]
 ```
-The config will be copied to `vuls-scan.data/config.toml` for the run, so that
+The config will be copied to `easy-vuls.data/config.toml` for the run, so that
 it ends inside the vuls container at `/vuls/config.toml`.
+
+
+### Prepare hosts
+The `vuls prepare` command will go though the hosts in the provided config file
+and make sure that any necissary preparations have been made. You can parepare
+hosts through easy-vuls using:
+```bash
+./easy-vuls scan --config=my-config.toml prepare
+```
+
+Some host OSes don't need any preparation if you are don't mind providing vuls
+with root access on tem.
+
+See [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)'s
+documentation for more information about preparing hosts.
+
 
 ### Run the scan and view the results
 ```bash
@@ -96,7 +106,7 @@ I haven't read into/tested how vuls handles problems with hosts.
 ## Using the results
 See [VulsRepo](https://github.com/usiusi360/vulsrepo)
 
-The results are stored in `./vuls-scan.results/`.
+The results are stored in `./easy-vuls.results/`.
 
 ** TODO **
 

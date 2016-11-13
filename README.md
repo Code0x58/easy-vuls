@@ -40,15 +40,20 @@ before you retry.
 ./easy-vuls database update
 ```
 
+This uses
+[fetchnvd](https://github.com/kotakanbe/go-cve-dictionary#usage-fetch-nvd-data).
+
+
 ### Create a vuls config file
-You will have to provide a config file for vuls to both prepare and scan hosts. A minimal config file to scan a single host would be something like:
+You will have to provide a config file for vuls to both prepare and scan hosts.
+A minimal config file to scan a single host would be something like:
 ```toml
 [server.my-host]
 host = "my-host.example.com"
 user = "root"
 ```
 
-The [documentation](https://github.com/future-architect/vuls#configuration)
+The [vuls documentation](https://github.com/future-architect/vuls#configuration)
 goes into more detail on everything that there is to configure, including
 parameters for docker containers on the hosts.
 

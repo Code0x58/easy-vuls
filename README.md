@@ -1,24 +1,34 @@
 # easy-vuls
 
-This provides a single script to provide a quick and easy way to use
+This is a single script to provide a quick and easy way to use
 [vuls](https://hub.docker.com/r/vuls/vuls/),
 [go-cve-dictionary](https://hub.docker.com/r/vuls/go-cve-dictionary/), and
 [VulsRepo](https://github.com/usiusi360/vulsrepo).
 
 This requires Python3 and Docker.
 
-This is currently the work of a couple of evenings, so it is probably good to
-wait until this has matured a bit more before using taking anything as final.
+This script is likely to change, and the documentation is not yet complete.
+
+The projects this script depends on are still under development, so things may
+not work as expected. If you find any issues, please report them to he relevant
+project!
+
 
 ## Getting started
 To being, you will need Python3 and Docker. There are no additional Python
 module dependencies.
 
+
 ### Authentication
-You can connect to the hosts using `ssh-agent` which is what I recommend.
+You can connect to the hosts through `SSH_AUTH_SOCK` provided by `ssh-agent`,
+which is passed into the container.
 
 You can use private keys by putting them in `easy-vuls.data/keys/` and then
-referring to it in your configuration file. ***see the security section***
+referring to it in your configuration file.
+
+See [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)'s
+documentation for more information about preparing hosts.
+
 
 ### Update the database
 Once you have this script and Docker create/available, you will have to update
@@ -28,58 +38,17 @@ before you retry.
 ./easy-vuls database update
 ```
 
-### Create a vuls scan config file
-You will have to provide a config file for vuls, but all you need to scan a single host would be:
+### Create a vuls config file
+You will have to provide a config file for vuls to both prepare and scan hosts. A minimal config file to scan a single host would be something like:
 ```toml
 [server.my-host]
-host = "my-host.domain.tld"
+host = "my-host.example.com"
 user = "root"
 ```
 
 The [documentation](https://github.com/future-architect/vuls#configuration)
-goes into more details on everything that there is to congiure. Here is an
-example with all options that you can configure for all/individual hosts if
-you want to:
-```toml
-[default]
-port = "22"
-user = "root"
-
-[server]
-[server.mail]
-host = "mail.my-domain.net"
-# put the keys in ./easy-vuls.data/keys/mail_rsa to mount them in
-keyPath = "/vuls/keys/mail_rsa"
-
-[server.logs]
-host = "logs.my-domain.net"
-ignoreCves = [
-  "CVE-2011-1155"
-]
-
-[server.port]
-host = "port.my-domain.net"
-port = "180"
-# Add optional data to the resulting JSON resulting
-optional = [
-  ["key", "value"],
-  ["opinion", "non-standard ports are bad"]
-]
-# see the vuls documentation
-cpeNames = [
-  "cpe:/a:rubyonrails:ruby_on_rails:4.2.1",
-]
-
-[server.host]
-host = "host"
-# scan Docker containers running on the host
-containers = [
-  "nginx",
-  "my-service",
-]
-```
-The config will be copied to `easy-vuls.data/config.toml` for the run, so that
-it ends inside the vuls container at `/vuls/config.toml`.
+goes into more detail on everything that there is to configure, including
+parameters for docker containers on the hosts.
 
 
 ### Prepare hosts
@@ -97,34 +66,46 @@ See [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)'s
 documentation for more information about preparing hosts.
 
 
-### Run the scan and view the results
+### Run a scan
+To run `vuls scan` with the database retrieved earlier, you can use:
 ```bash
-./vuln-scan scan --config=my-config.toml --view
+./easy-vuls scan --config=my-config.toml
 ```
-I haven't read into/tested how vuls handles problems with hosts.
 
-## Using the results
-See [VulsRepo](https://github.com/usiusi360/vulsrepo)
 
-The results are stored in `./easy-vuls.results/`.
+### Show the results
+The results of scans are printed to the terminal, and JSON files for each
+scan/host is stored in `./easy-vuls.results/`.
 
-** TODO **
+To start serving results on [127.0.0.1:8080/vulsrepo/](127.0.0.1:8080/vulsrepo/) through [VulsRepo](https://github.com/usiusi360/vulsrepo)
+you would use:
+```bash
+./easy-vuls results serve
+```
 
-## Caveats
+You can also browse results in your terminal through `vuls tui` by using:
+```bash
+./easy-vuls results browse
+```
 
-### vuls prepare
-It looks like [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)
-doesn't always work. During testing with access to root on a Debian 8 (Jessie)
-it was unable to install `aptitude` as `apt-get` raised a `[yN]` prompt without
-an interactive session, so failed.
 
-This should be easy enough to fix in `vuls`
-by providing `-y` or setting an environment variable to tell `apt` that the
-session isn't interactive (I can't remember what right now).
+## Security
+### SSH access
+The script uses `SSH_AUTH_SOCK` from the environment when it gets run. This
+will grant the containers access to any of the machines which allow any key on
+your keyring while the container is alive.
 
-## TODOs
-### Look into premissions of scan results
-At the moment the results of vuls' scan are owned by root. As a quick work around this the results are `chmod`ed from docker after each scan.
+You may also pass in private keys for the container to use, of course this adds
+to how much you would be trusting the container and its source.
 
-Later I will look into putting in a pull request to do something about in in
-[`vuls scan`](https://github.com/future-architect/vuls#usage-scan).
+vuls may require a lot of permissions on a host OS to do its job, for example
+on Debian it requires root/sudo access to `apt-get`, which can be used to
+install packages.
+
+### File ownership
+The files created inside the docker images are owned by `root:root`, which is
+a bit inconvenient if you want to have them owned by your current user on the
+host.
+
+To get around this, the script does a `chown -R` on the volumes mounted in so
+that the ownership matches that of `./easy-vuls`. This will include the contents of the `./easy-vuls.*/` directories, along with any config file you provide.

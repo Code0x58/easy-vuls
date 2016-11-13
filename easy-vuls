@@ -32,6 +32,8 @@ class DockerManager(object):
 
     def __init__(self):
         self.ensure_directories()
+        self.environs = ()
+        self.volumes = ()
 
     @property
     def path_prefix(self):
@@ -54,6 +56,52 @@ class DockerManager(object):
                 if os.path.exists(directory):
                     raise ValueError("{} is not a directory".format(directory))
                 os.makedirs(directory)
+
+    def run(self, log, args, image='vuls/vuls', publish=()):
+        log_directory = self._path('logs/{}'.format(log))
+        self._run(log, args, image=image, publish=publish)
+
+        # fix file ownership
+        volumes = []
+        for source, _ in self.volumes + ((log_directory, ''), ):
+            volumes.append('--volume={0}:/tmp/{0}'.format(source))
+        # copy owner:group from the script
+        stats = os.stat(os.path.abspath(sys.argv[0]))
+        chown = 'chown -R {}:{} /tmp/'.format(
+                    stats.st_uid, stats.st_gid,
+                    )
+        run([
+                'docker', 'run', '--rm', '--interactive',
+                '--entrypoint=/bin/sh',
+                ] + volumes + [
+                'vuls/vuls', '-c', chown,
+        ])
+
+    def _run(self, log, args, image, publish):
+        """
+        Run a vuls/vuls container
+        """
+        docker_args = [
+                'run', '--rm', '--interactive', '--tty',
+                '--volume={}:/var/log/vuls'.format(
+                    self._path('logs/{}'.format(log))
+                    ),
+                '--volume={}:/vuls'.format(self._path('data')),
+                '--volume=/etc/localtime:/etc/localtime:ro',
+        ]
+        for source, destination in self.volumes:
+            docker_args.append('--volume={}:{}'.format(source, destination))
+        for key, value in self.environs:
+            docker_args.append('--env={}={}'.format(key, value))
+        if publish:
+            listen_address, host_port, container_port = publish
+            docker_args.append('--publish={}:{}:{}'.format(
+                listen_address,
+                host_port,
+                container_port,
+            ))
+
+        run(['docker'] + docker_args + [image] + args)
 
 
 class NVD(DockerManager):
@@ -129,15 +177,10 @@ class NVD(DockerManager):
         """
         Pull NVD updates and store them in the persistent sqlite3 database.
         """
-        command = [
-            'docker', 'run',
-            '--rm', '--interactive', '--tty',
-            '--volume={}:/vuls'.format(self._path('data')),
-            '--volume={}:/var/log/vuls'.format(self._path('logs/database')),
-            'vuls/go-cve-dictionary',
+        args = [
             'fetchnvd', '-years',
         ] + [str(year) for year in years]
-        run(command)
+        self.run('fetchnvd', args, image='vuls/go-cve-dictionary')
 
     def delete(self):
         """
@@ -159,42 +202,30 @@ class Vuls(DockerManager):
 
     def __init__(self, config_path):
         super().__init__()
-        self.config_path = config_path
+        self.config_path = os.path.abspath(config_path)
         self.results_directory = self._path('results')
 
-    def run(self, command, args):
-        """
-        Run vuls/vuls with the given command and arguments.
-        """
-        copyfile(
-            self.config_path,
-            self._path('data/config.toml'),
+        self.volumes += (
+            (self.results_directory, self.results_directory),
+            (self.config_path, '/vuls/config.toml'),
         )
+
         ssh_auth_sock = os.environ.get('SSH_AUTH_SOCK')
         if ssh_auth_sock is None:
             logging.warn("No SSH_AUTH_SOCK found. See ssh-agent")
-
-        log_directory = self._path('logs/{}'.format(command))
-        run_args = [
-            'docker', 'run',
-            '--rm', '--interactive', '--tty',
-            '--volume=/etc/localtime:/etc/localtime:ro',
-            '--volume={}:/vuls'.format(self._path('data')),
-            '--volume={0}:{0}'.format(self.results_directory),
-            '--volume={}:/var/log/vuls'.format(log_directory),
-        ]
-        if ssh_auth_sock:
-            run_args += [
-                    '--volume={}:/vuls/SSH_AUTH_SOCK'.format(ssh_auth_sock),
-                    '--env=SSH_AUTH_SOCK=/vuls/SSH_AUTH_SOCK',
-            ]
-        run(run_args + ['vuls/vuls', command] + args)
+        else:
+            self.environs += (
+                ('SSH_AUTH_SOCK', '/root/SSH_AUTH_SOCK'),
+            )
+            self.volumes += (
+                (ssh_auth_sock, '/root/SSH_AUTH_SOCK'),
+            )
 
     def prepare(self):
         """
         Prepare hosts for scanning if necissary.
         """
-        self.run('prepare', [])
+        self.run('prepare', ['prepare'])
 
     def scan(self):
         """
@@ -205,6 +236,7 @@ class Vuls(DockerManager):
             raise DatabaseDoesNotExist()
 
         args = [
+                'scan',
                 '--results-dir={}'.format(self.results_directory),
                 '-cve-dictionary-dbpath=/vuls/cve.sqlite3',
                 '-report-json',
@@ -217,32 +249,29 @@ class Results(DockerManager):
         'results',
     ]
 
+    def __init__(self):
+        super().__init__()
+        # TODO: update vuls/vulsrepo so that it can take in the results path
+        self.volumes += (
+            (self._path('results'), '/vuls/results'),
+        )
+
     def browse_results(self):
         """
         Start up the ncurses based user interface to the scan results.
         """
-        docker = ['docker']
-        docker_args = [
-                'run', '--rm', '-it',  # '--interactive', '--tty',
-                '--volume={}:/vuls'.format(self._path('data')),
-                '--volume={}:/vuls/results'.format(self._path('results')),
-                ]
-        image = ['vuls/vuls']
-        container_args = ['tui']
-        run(docker+docker_args+image+container_args)
+        self.run('tui', ['tui'])
 
     def serve(self, listen_address, listen_port):
         """
         Start up VulsRepo to serve the results.
         """
-        docker = ['docker']
-        docker_args = [
-                'run', '--rm', '--interactive', '--tty',
-                '--volume={}:/vuls/results'.format(self._path('results')),
-                '--publish={}:{}:80'.format(listen_address, listen_port),
-        ]
-        image = ['vuls/vulsrepo']
-        run(docker+docker_args+image)
+        self.run(
+            'vulsrepo',
+            [],
+            image='vuls/vulsrepo',
+            publish=(listen_address, listen_port, 80),
+        )
 
     def delete(self):
         """

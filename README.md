@@ -18,6 +18,8 @@ project!
 To being, you will need Python3 and Docker. There are no additional Python
 module dependencies.
 
+You can use `./easy-vuls --help` to get information about commands.
+
 
 ### Authentication
 You can connect to the hosts through `SSH_AUTH_SOCK` provided by `ssh-agent`,

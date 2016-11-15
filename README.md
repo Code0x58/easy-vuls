@@ -13,9 +13,17 @@ The projects this script depends on are still under development, so things may
 not work as expected. If you find any issues, please report them to he relevant
 project!
 
+At the moment you have to manually run `docker pull` to get in the latest
+images whenever they have been updated:
+```bash
+docker pull vuls/vuls
+docker pull vuls/go-cve-dictionary
+docker pull vuls/vulsrepo
+```
+
 
 ## Getting started
-To being, you will need Python3 and Docker. There are no additional Python
+To begin, you will need Python3 and Docker. There are no additional Python
 module dependencies.
 
 You can use `./easy-vuls --help` to get information about commands.
@@ -33,9 +41,9 @@ documentation for more information about preparing hosts.
 
 
 ### Update the database
-Once you have this script and Docker create/available, you will have to update
-the database. If you do not, you will get an error message telling you to do it
-before you retry.
+Once you have this script and Docker, you will have to update the database.
+If you do not, you will get an error message telling you to do it before
+you retry.
 ```bash
 ./easy-vuls database update
 ```
@@ -67,7 +75,7 @@ hosts through easy-vuls using:
 ```
 
 Some host OSes don't need any preparation if you are don't mind providing vuls
-with root access on tem.
+with root access on them.
 
 See [`vuls prepare`](https://github.com/future-architect/vuls#usage-prepare)'s
 documentation for more information about preparing hosts.
@@ -105,7 +113,7 @@ your keyring while the container is alive.
 You may also pass in private keys for the container to use, of course this adds
 to how much you would be trusting the container and its source.
 
-vuls may require a lot of permissions on a host OS to do its job, for example
+vuls may require a lot of permissions on a target OS to do its job, for example
 on Debian it requires root/sudo access to `apt-get`, which can be used to
 install packages.
 
@@ -115,4 +123,6 @@ a bit inconvenient if you want to have them owned by your current user on the
 host.
 
 To get around this, the script does a `chown -R` on the volumes mounted in so
-that the ownership matches that of `./easy-vuls`. This will include the contents of the `./easy-vuls.*/` directories, along with any config file you provide.
+that the ownership matches that of `./easy-vuls`. This will include the
+contents of the `./easy-vuls.*/` directories, along with any config file you
+provide.

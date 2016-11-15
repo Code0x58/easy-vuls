@@ -203,10 +203,11 @@ class Vuls(DockerManager):
             'results',
     ]
 
-    def __init__(self, config_path):
+    def __init__(self, config_path, debug=False):
         super().__init__()
         self.config_path = os.path.abspath(config_path)
         self.results_directory = self._path('results')
+        self.debug = debug
 
         self.volumes += (
             (self.results_directory, self.results_directory),
@@ -228,7 +229,7 @@ class Vuls(DockerManager):
         """
         Prepare hosts for scanning if necissary.
         """
-        self.run('prepare', ['prepare'])
+        self.run('prepare', ['prepare'] + (['--debug'] if self.debug else []))
 
     def scan(self):
         """
@@ -243,7 +244,7 @@ class Vuls(DockerManager):
                 '--results-dir={}'.format(self.results_directory),
                 '-cve-dictionary-dbpath=/vuls/cve.sqlite3',
                 '-report-json',
-        ]
+        ] + (['--debug'] if self.debug else [])
         self.run('scan', args)
 
 
@@ -333,7 +334,7 @@ class VulsScannerInterface(object):
         """
         Run a scan with the given config
         """
-        vuls = Vuls(args.config)
+        vuls = Vuls(args.config, debug=args.debug)
         if args.action == 'prepare':
             vuls.prepare()
         else:
@@ -390,6 +391,11 @@ class VulsScannerInterface(object):
                 '--config',
                 required=True,
                 help="The config file to use for vuls",
+        )
+        scan.add_argument(
+                '--debug',
+                action='store_true',
+                help="Make vuls log debug information",
         )
         scan_action = scan.add_subparsers(
                 dest='action',

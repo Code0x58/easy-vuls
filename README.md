@@ -92,8 +92,8 @@ To run `vuls scan` with the database retrieved earlier, you can use:
 The results of scans are printed to the terminal, and JSON files for each
 scan/host is stored in `./easy-vuls.results/`.
 
-To start serving results on [127.0.0.1:8080/vulsrepo/](127.0.0.1:8080/vulsrepo/) through [VulsRepo](https://github.com/usiusi360/vulsrepo)
-you would use:
+To start serving results on [127.0.0.1:8080/vulsrepo/](127.0.0.1:8080/vulsrepo/)
+through [VulsRepo](https://github.com/usiusi360/vulsrepo) you would use:
 ```bash
 ./easy-vuls results serve
 ```
